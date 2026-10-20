@@ -1,28 +1,33 @@
 @mode(host.dual)
 
-from appinfo import (APP_NAME, APP_VERSION, APP_SUMMARY);
-from cli.args import (DEFAULT_GREETING);
+from appinfo import (APP_NAME, APP_VERSION);
 
+# The text of `xcopy /?`: the syntax and a short line per supported switch.
 pub func usage(): string {
     let lines = [
-        i"usage: {$ APP_NAME $} [OPTIONS] COMMAND [ARGS...]",
+        "Copies files and directory trees.",
         "",
-        APP_SUMMARY,
+        "XCOPY source [destination] [/S [/E]] [/T] [/I] [/Y | /-Y] [/Q | /F] [/L]",
+        "      [/C] [/H] [/U] [/EXCLUDE:file1[+file2]...]",
         "",
-        "Commands:",
-        "  hello [NAME]          Print a greeting (NAME defaults to 'world')",
-        "  help                  Show this help",
-        "",
-        "Options:",
-        i"  -g, --greeting TEXT   Greeting used by 'hello' (default: {$ DEFAULT_GREETING $})",
-        "      --shout           Print the greeting in upper case",
-        "  -v, --verbose         Print diagnostic messages to stderr",
-        "  -h, --help            Show this help and exit",
-        "  -V, --version         Show the version and exit",
+        "  /S         Copy subdirectories too, except empty ones.",
+        "  /E         Copy subdirectories too, including empty ones.",
+        "  /T         Create the directory structure only, without files.",
+        "  /I         Treat a missing destination as a directory when copying",
+        "             a directory or a wildcard.",
+        "  /Y, /-Y    Overwrite without asking, or ask (the default; COPYCMD may",
+        "             preset /Y).",
+        "  /Q         Do not list the files.",
+        "  /F         List full source and destination names.",
+        "  /L         List the files that would be copied; copy nothing.",
+        "  /C         Continue after errors.",
+        "  /H         Copy hidden files (names starting with a dot) too.",
+        "  /U         Copy only files that already exist in the destination.",
+        "  /EXCLUDE   Skip files whose full path contains a line of the files listed.",
     ];
     return lines.join("\n");
 }
 
 pub func version_line(): string {
-    return i"{$ APP_NAME $} {$ APP_VERSION $}";
+    return i"{$ APP_NAME $} (loup-cmd-{$ APP_NAME $}) {$ APP_VERSION $}";
 }

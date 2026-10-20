@@ -1,0 +1,90 @@
+@mode(host.dual)
+
+# Whole runs (with prompt answers given as text) and their exit statuses.
+# These tests print the program's normal output.
+
+from debug.assert import (expect, expectEq);
+from io.fs import (createDir, writeText, readText, removeDir, isDir, isFile);
+from appinfo import (EXIT_OK, EXIT_NO_FILES, EXIT_ABORTED, EXIT_INIT, EXIT_WRITE);
+from cli.args import (Options, default_options, OVERWRITE_ALL);
+from cli.app import (run);
+from commands.answers import (Answers, answers_from);
+from commands.xcopy import (xcopy_with, count_line, msg_file_or_dir, msg_overwrite, copy_file);
+
+const ROOT: string = "build/tmp/xcopy_run";
+
+func fixture(): void {
+    if (isDir(ROOT)) {
+        removeDir(ROOT);
+    }
+    createDir(ROOT + "/src/sub");
+    createDir(ROOT + "/src/empty");
+    writeText(ROOT + "/src/a.txt", "a");
+    writeText(ROOT + "/src/sub/b.txt", "b");
+}
+
+func with_answers(opts: Options, text: string): int {
+    var answers = answers_from(text);
+    return xcopy_with(opts, edits: answers);
+}
+
+func test_messages(): void {
+    expectEq(count_line(1, false), "1 File(s) copied", "copied");
+    expectEq(count_line(3, true), "3 File(s)", "/L");
+    expectEq(msg_overwrite("d\\a.txt"), "Overwrite d\\a.txt (Yes/No/All)? ", "overwrite");
+    expect(msg_file_or_dir("x").startsWith("Does x specify a file name\n"), "file or directory");
+}
+
+func test_copy_tree(): void {
+    fixture();
+    expectEq(run([ROOT + "\\src", ROOT + "\\dst", "/S", "/I"]), EXIT_OK, "/S /I");
+    expectEq(readText(ROOT + "/dst/sub/b.txt"), "b", "copied below");
+    expect(!isDir(ROOT + "/dst/empty"), "/S skips empty directories");
+    expectEq(run([ROOT + "/src", ROOT + "/dst2", "/E", "/I", "/Q"]), EXIT_OK, "/E");
+    expect(isDir(ROOT + "/dst2/empty"), "/E keeps them");
+    expectEq(run([ROOT + "/src", ROOT + "/dst3", "/T", "/E", "/I"]), EXIT_OK, "/T");
+    expect(isDir(ROOT + "/dst3/sub") and !isFile(ROOT + "/dst3/a.txt"), "directories only");
+    expectEq(run([ROOT + "/src", ROOT + "/dst4", "/L", "/S", "/I"]), EXIT_OK, "/L");
+    expect(!isDir(ROOT + "/dst4"), "/L copies nothing");
+    removeDir(ROOT);
+}
+
+func test_prompts(): void {
+    fixture();
+    var opts = default_options([ROOT + "/src/a.txt", ROOT + "/new"]);
+    expectEq(with_answers(opts, "d\n"), EXIT_OK, "D: a directory");
+    expect(isFile(ROOT + "/new/a.txt"), "into the directory");
+    opts.operands = [ROOT + "/src/a.txt", ROOT + "/file.txt"];
+    expectEq(with_answers(opts, "x\nF\n"), EXIT_OK, "F after an invalid answer");
+    expectEq(readText(ROOT + "/file.txt"), "a", "onto the name");
+    expectEq(with_answers(opts, "y\n"), EXIT_OK, "an existing file: only the overwrite question");
+    opts.operands = [ROOT + "/src/a.txt", ROOT + "/other"];
+    expectEq(with_answers(opts, ""), EXIT_ABORTED, "no answer");
+    writeText(ROOT + "/new/a.txt", "old");
+    opts.operands = [ROOT + "/src/a.txt", ROOT + "/new"];
+    expectEq(with_answers(opts, "n\n"), EXIT_OK, "N keeps the file");
+    expectEq(readText(ROOT + "/new/a.txt"), "old", "not overwritten");
+    expectEq(with_answers(opts, "y\n"), EXIT_OK, "Y overwrites");
+    expectEq(readText(ROOT + "/new/a.txt"), "a", "overwritten");
+    writeText(ROOT + "/new/a.txt", "old");
+    opts.overwrite = OVERWRITE_ALL;
+    expectEq(with_answers(opts, ""), EXIT_OK, "/Y");
+    expectEq(readText(ROOT + "/new/a.txt"), "a", "overwritten without a question");
+    removeDir(ROOT);
+}
+
+func test_errors(): void {
+    fixture();
+    let none: list[string] = [];
+    expectEq(run(none), EXIT_INIT, "no operand");
+    expectEq(run([ROOT + "/nope.txt", ROOT + "/d"]), EXIT_INIT, "missing source");
+    expectEq(run([ROOT + "/src", ROOT + "/src/sub", "/S"]), EXIT_INIT, "cyclic");
+    expectEq(run([ROOT + "/src", ROOT + "/src"]), EXIT_INIT, "onto itself");
+    expectEq(run([ROOT + "/src/*.none", ROOT + "/d"]), EXIT_INIT, "no match");
+    expectEq(run([ROOT + "/src/empty", ROOT + "/d", "/I"]), EXIT_NO_FILES, "nothing to copy");
+    expectEq(run([ROOT + "/src", ROOT + "/d", "/EXCLUDE:" + ROOT + "/none.txt"]), EXIT_INIT, "exclusion file");
+    createDir(ROOT + "/blocked/a.txt");
+    expectEq(run([ROOT + "/src", ROOT + "/blocked", "/Y"]), EXIT_WRITE, "a directory in the way");
+    expectEq(copy_file(ROOT + "/src/a.txt", ROOT + "/blocked/a.txt"), "File creation error - Access is denied.", "message");
+    removeDir(ROOT);
+}

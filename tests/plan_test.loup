@@ -1,0 +1,101 @@
+@mode(host.dual)
+
+# Planning: source resolution, the walk, destinations and the copy list.
+
+from debug.assert import (expect, expectEq);
+from io.fs import (createDir, writeText, removeDir, isDir);
+from commands.plan import (resolve_source, collect, excluded, destination_kind, plan_items,
+    KIND_DIR, KIND_FILE, KIND_ASK, MSG_INVALID_PATH);
+
+const ROOT: string = "build/tmp/xcopy_plan";
+
+func fixture(): void {
+    if (isDir(ROOT)) {
+        removeDir(ROOT);
+    }
+    createDir(ROOT + "/src/sub/deep");
+    createDir(ROOT + "/src/empty");
+    createDir(ROOT + "/src/.git");
+    createDir(ROOT + "/out");
+    writeText(ROOT + "/src/b.txt", "b");
+    writeText(ROOT + "/src/A.txt", "a");
+    writeText(ROOT + "/src/c.log", "c");
+    writeText(ROOT + "/src/.env", "e");
+    writeText(ROOT + "/src/sub/d.txt", "d");
+    writeText(ROOT + "/src/sub/deep/e.txt", "e");
+    writeText(ROOT + "/src/.git/f.txt", "f");
+    writeText(ROOT + "/out/A.txt", "old");
+}
+
+func test_resolve_source(): void {
+    fixture();
+    let dir = resolve_source(ROOT + "\\src\\");
+    expectEq(dir.base, ROOT + "/src", "directory base");
+    expectEq(dir.pattern, "*", "every file");
+    expect(dir.many and !dir.wild, "a directory");
+    let wild = resolve_source(ROOT + "/src/*.txt");
+    expectEq(wild.base, ROOT + "/src", "wildcard base");
+    expectEq(wild.pattern, "*.txt", "pattern");
+    expect(wild.many and wild.wild, "a wildcard");
+    let one = resolve_source(ROOT + "/src/b.txt");
+    expect(!one.many and one.error.len() == 0, "one file");
+    expectEq(resolve_source(ROOT + "/src/none.txt").error, "File not found - none.txt", "missing file");
+    expectEq(resolve_source(ROOT + "/nodir/a.txt").error, MSG_INVALID_PATH, "missing directory");
+    expectEq(resolve_source(ROOT + "/s*/a.txt").error, MSG_INVALID_PATH, "wildcard in a directory");
+    removeDir(ROOT);
+}
+
+func test_collect(): void {
+    fixture();
+    let none: list[string] = [];
+    let src = resolve_source(ROOT + "/src");
+    let top = collect(src, false, false, none, "/w");
+    expectEq(top.files.join(","), "A.txt,b.txt,c.log", "top level, name order, no hidden");
+    let all = collect(src, true, false, none, "/w");
+    expectEq(all.files.join(","), "A.txt,b.txt,c.log,sub/d.txt,sub/deep/e.txt", "with /S");
+    expectEq(all.dirs.join(","), "empty,sub,sub/deep", "walked directories");
+    expectEq(all.file_dirs.join(","), "sub,sub/deep", "directories with files");
+    let hidden = collect(src, true, true, none, "/w");
+    expectEq(hidden.files.join(","), ".env,A.txt,b.txt,c.log,.git/f.txt,sub/d.txt,sub/deep/e.txt", "/H");
+    let txt = collect(resolve_source(ROOT + "/src/*.TXT"), true, false, none, "/w");
+    expectEq(txt.files.join(","), "A.txt,b.txt,sub/d.txt,sub/deep/e.txt", "pattern in every directory");
+    expectEq(collect(resolve_source(ROOT + "/src/*.none"), true, false, none, "/w").matched, 0, "no match");
+    removeDir(ROOT);
+}
+
+func test_exclude(): void {
+    fixture();
+    let src = resolve_source(ROOT + "/src");
+    let ex = collect(src, true, false, ["\\DEEP\\", ".LOG"], "/w");
+    expectEq(ex.files.join(","), "A.txt,b.txt,sub/d.txt", "\\deep\\ and .log skipped");
+    expect(excluded("x/obj", ["\\OBJ\\"], "/w", true), "a directory gets a final backslash");
+    expect(!excluded("x/obj", ["\\OBJ\\"], "/w", false), "a file does not");
+    expect(excluded("a.txt", ["\\W\\A"], "/w", false), "the absolute path counts");
+    removeDir(ROOT);
+}
+
+func test_destination_kind(): void {
+    fixture();
+    let dir = resolve_source(ROOT + "/src");
+    let one = resolve_source(ROOT + "/src/b.txt");
+    expectEq(destination_kind("", one, false), KIND_DIR, "none: the current directory");
+    expectEq(destination_kind(ROOT + "/out", one, false), KIND_DIR, "an existing directory");
+    expectEq(destination_kind(ROOT + "/out/A.txt", one, false), KIND_FILE, "an existing file");
+    expectEq(destination_kind("new\\", one, false), KIND_DIR, "a trailing separator");
+    expectEq(destination_kind("new", one, true), KIND_ASK, "/I does not apply to one file");
+    expectEq(destination_kind("new", dir, true), KIND_DIR, "/I with a directory");
+    expectEq(destination_kind("new", dir, false), KIND_ASK, "ask");
+    removeDir(ROOT);
+}
+
+func test_plan_items(): void {
+    fixture();
+    let src = resolve_source(ROOT + "\\src");
+    let items = plan_items(src, ["A.txt", "sub/d.txt"], "dst", true);
+    expectEq(items[1].src, ROOT + "/src/sub/d.txt", "source path");
+    expectEq(items[1].dst, "dst/sub/d.txt", "relative path kept");
+    expectEq(items[1].shown, "build\\tmp\\xcopy_plan\\src\\sub\\d.txt", "listed with backslashes");
+    let onto = plan_items(src, ["A.txt", "b.txt"], "one.txt", false);
+    expectEq(onto[1].dst, "one.txt", "a file destination");
+    removeDir(ROOT);
+}

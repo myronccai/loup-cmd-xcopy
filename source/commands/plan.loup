@@ -1,0 +1,179 @@
+@mode(host.dual)
+
+# Planning an xcopy run: which files the source names, which directories
+# are walked, and where each file goes. Nothing here writes to the disk.
+#
+# - Source: a directory (all its files), a wildcard (`src\*.txt`) or one
+#   file. With /S or /E the same name or pattern is also looked for in every
+#   subdirectory, depth first, in name order.
+# - Hidden files and directories (dot-names) are skipped unless /H; files
+#   and directories whose absolute path contains an /EXCLUDE string are
+#   skipped.
+# - Destination: an existing directory, a name ending in `\` or `/`, or with
+#   /I a missing name when the source is a directory or a wildcard, is a
+#   directory (files keep their path relative to the source); an existing
+#   file is a file; anything else has to be asked (F or D).
+
+from io.fs import (isDir, isFile);
+from win.paths import (display_path, fs_path, split_path, strip_trailing_separators);
+from win.wildcard import (MATCH_FILES, has_wildcards, list_matches, subdirectories, MAX_DEPTH);
+from commands.fspaths import (absolute_path, is_hidden_name, under);
+
+pub const MSG_INVALID_PATH: string = "Invalid path";
+
+# What the source operand names.
+pub struct Source {
+    pub error: string;       # "" or the message for a source that does not exist
+    pub base: string;        # fs form: the directory the files are relative to ("" = current)
+    pub shown_base: string;  # the same directory as xcopy lists it (the operand's own spelling)
+    pub pattern: string;     # the name or wildcard to copy ("*" for a whole directory)
+    pub many: bool;          # a directory or a wildcard: possibly several files
+    pub wild: bool;          # the pattern came from the operand (not a whole directory)
+}
+
+func source_error(message: string): Source {
+    return Source(error = message, base = "", shown_base = "", pattern = "", many = false, wild = false);
+}
+
+func make_source(base: string, pattern: string, many: bool, wild: bool): Source {
+    return Source(error = "", base = base, shown_base = base, pattern = pattern, many = many, wild = wild);
+}
+
+# Resolves the source operand (either separator).
+pub func resolve_source(operand: string): Source {
+    let p = strip_trailing_separators(fs_path(operand));
+    if (isDir(p)) {
+        return make_source(p, "*", true, false);
+    }
+    let parts = split_path(p);
+    if (has_wildcards(parts.dir)) {
+        return source_error(MSG_INVALID_PATH);
+    }
+    if (parts.dir.len() > 0 and !isDir(parts.dir)) {
+        return source_error(MSG_INVALID_PATH);
+    }
+    if (has_wildcards(parts.name)) {
+        return make_source(parts.dir, parts.name, true, true);
+    }
+    if (isFile(p)) {
+        return make_source(parts.dir, parts.name, false, true);
+    }
+    return source_error("File not found - " + parts.name);
+}
+
+# The files and directories found under the source, relative to its base.
+pub struct Collected {
+    pub files: list[string];      # fs form, in copy order
+    pub dirs: list[string];       # every subdirectory walked (for /E), pre-order
+    pub file_dirs: list[string];  # the subdirectories that hold a file to copy (for /T)
+    pub matched: int;             # names that matched the pattern, before /H and /EXCLUDE
+}
+
+# Whether /EXCLUDE skips a path: any string (upper case) is part of its
+# absolute path, written with `\` (a directory's with a `\` at the end, so
+# that `\obj\` skips the directory obj).
+pub func excluded(path: string, excludes: list[string], cwd: string, is_dir: bool): bool {
+    if (excludes.len() == 0) {
+        return false;
+    }
+    var shown = display_path(absolute_path(path, cwd)).toUpperCase();
+    if (is_dir) {
+        shown = shown + "\\";
+    }
+    for (text in excludes) {
+        if (shown.index_of(text) >= 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+# Walks the source: its own matches first, then (with `recurse`) each
+# subdirectory in name order, depth first. `excludes` must be upper case.
+pub func collect(source: Source, recurse: bool, hidden: bool, excludes: list[string], cwd: string): Collected {
+    var files: list[string] = [];
+    var dirs: list[string] = [];
+    var file_dirs: list[string] = [];
+    var matched = 0;
+    let base = source.base;
+    let pattern = source.pattern;
+    var stack: list[string] = [""];
+    var depths: list[int] = [0];
+    while (stack.len() > 0) {
+        let rel = stack.pop();
+        let depth = depths.pop();
+        if (rel.len() > 0) {
+            dirs.push(rel);
+        }
+        let dir = under(base, rel);
+        var any = false;
+        for (name in list_matches(dir, pattern, MATCH_FILES)) {
+            matched += 1;
+            let rel_file = under(rel, name);
+            if ((hidden or !is_hidden_name(name)) and !excluded(under(base, rel_file), excludes, cwd, false)) {
+                files.push(rel_file);
+                any = true;
+            }
+        }
+        if (any and rel.len() > 0) {
+            file_dirs.push(rel);
+        }
+        if (recurse and depth < MAX_DEPTH) {
+            let subs = subdirectories(dir);
+            var k = subs.len() - 1;
+            while (k >= 0) {
+                let rel_dir = under(rel, subs[k]);
+                if ((hidden or !is_hidden_name(subs[k])) and !excluded(under(base, rel_dir), excludes, cwd, true)) {
+                    stack.push(rel_dir);
+                    depths.push(depth + 1);
+                }
+                k -= 1;
+            }
+        }
+    }
+    return Collected(files = files, dirs = dirs, file_dirs = file_dirs, matched = matched);
+}
+
+# How the destination is used.
+pub const KIND_DIR: int = 1;    # copy into this directory, keeping relative paths
+pub const KIND_FILE: int = 2;   # copy onto this file name
+pub const KIND_ASK: int = 3;    # missing: ask whether it is a file or a directory
+
+# The kind of the destination operand ("" when none was given: the current
+# directory).
+pub func destination_kind(operand: string, source: Source, assume_dir: bool): int {
+    if (operand.len() == 0 or operand.endsWith("/") or operand.endsWith("\\")) {
+        return KIND_DIR;
+    }
+    let p = fs_path(operand);
+    if (isDir(p)) {
+        return KIND_DIR;
+    }
+    if (isFile(p)) {
+        return KIND_FILE;
+    }
+    if (assume_dir and source.many) {
+        return KIND_DIR;
+    }
+    return KIND_ASK;
+}
+
+# One file to copy.
+pub struct Item {
+    pub src: string;     # fs form
+    pub dst: string;     # fs form
+    pub shown: string;   # the source as xcopy lists it
+}
+
+# The copies to make: each file keeps its path relative to the source below
+# a destination directory, or goes onto the destination file.
+pub func plan_items(source: Source, files: list[string], dest: string, dest_is_dir: bool): list[Item] {
+    var out: list[Item] = [];
+    let base = source.base;
+    let shown_base = source.shown_base;
+    for (rel in files) {
+        let dst = if (dest_is_dir) { under(dest, rel) } else { dest };
+        out.push(Item(src = under(base, rel), dst = dst, shown = display_path(under(shown_base, rel))));
+    }
+    return out;
+}

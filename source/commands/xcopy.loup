@@ -1,0 +1,257 @@
+@mode(host.dual)
+
+# xcopy: copies files and directory trees. run_xcopy plans the copy
+# (commands/plan.loup), asks what it has to ask (destination kind,
+# overwrites), then lists and copies each file and prints the count.
+#
+# io.fs never reports a failure in native builds (and throws in Stage0), so
+# every directory creation and copy is checked afterwards.
+
+from appinfo import (EXIT_OK, EXIT_NO_FILES, EXIT_ABORTED, EXIT_INIT, EXIT_WRITE);
+from cli.args import (Options, OVERWRITE_ASK, OVERWRITE_ALL);
+from io.fs import (copy, createDir, isDir, isFile);
+from win.messages import (MSG_ACCESS_DENIED);
+from win.paths import (display_path, fs_path, parent_dir, strip_trailing_separators);
+from commands.answers import (Answers, stdin_answers, has_answer, take_answer);
+from commands.fspaths import (current_dir, absolute_path, is_within, under);
+from commands.plan import (Item, resolve_source, collect, destination_kind,
+    plan_items, KIND_ASK, KIND_DIR, KIND_FILE);
+
+pub const MSG_NONE_COPIED: string = "0 File(s) copied";
+pub const MSG_CYCLIC: string = "Cannot perform a cyclic copy";
+pub const MSG_ONTO_ITSELF: string = "File cannot be copied onto itself";
+
+# The last line: `N File(s) copied`, or `N File(s)` with /L.
+pub func count_line(n: int, list_only: bool): string {
+    if (list_only) {
+        return str(n) + " File(s)";
+    }
+    return str(n) + " File(s) copied";
+}
+
+pub func msg_cant_read(name: string): string {
+    return "Can't read file: " + name;
+}
+
+pub func msg_file_or_dir(name: string): string {
+    return "Does " + name + " specify a file name\nor directory name on the target\n(F = file, D = directory)? ";
+}
+
+pub func msg_overwrite(name: string): string {
+    return "Overwrite " + name + " (Yes/No/All)? ";
+}
+
+pub func msg_unable_dir(name: string): string {
+    return "Unable to create directory - " + name;
+}
+
+pub func msg_creation_error(reason: string): string {
+    return "File creation error - " + reason;
+}
+
+# Prints a prompt until the answer is one of `choices` (upper-case letters)
+# and returns that letter, or "" when the input has ended. The answer is
+# echoed, as the console would.
+pub func ask(question: string, choices: string, edits answers: Answers): string {
+    while (true) {
+        print(question);
+        if (!has_answer(edits: answers)) {
+            println("");
+            return "";
+        }
+        let answer = take_answer(edits: answers);
+        println(answer);
+        let up = answer.toUpperCase();
+        if (up.len() > 0 and choices.index_of(up) >= 0) {
+            return up;
+        }
+    }
+    return "";
+}
+
+# Creates a directory (and its parents); whether it exists afterwards.
+pub func make_dir(path: string): bool {
+    if (path.len() == 0 or isDir(path)) {
+        return true;
+    }
+    try {
+        createDir(path);
+    } catch (Exception as e) {
+        return false;
+    }
+    return isDir(path);
+}
+
+# Copies one file, creating its directory. Returns "" or the error message.
+pub func copy_file(src: string, dst: string): string {
+    let parent = parent_dir(dst);
+    if (!make_dir(parent)) {
+        return msg_unable_dir(display_path(parent));
+    }
+    if (isDir(dst)) {
+        return msg_creation_error(MSG_ACCESS_DENIED);
+    }
+    try {
+        copy(src, dst);
+    } catch (Exception as e) {
+        return msg_creation_error(MSG_ACCESS_DENIED);
+    }
+    if (!isFile(dst)) {
+        return msg_creation_error(MSG_ACCESS_DENIED);
+    }
+    return "";
+}
+
+# Reads the /EXCLUDE files: their non-empty lines, upper case. Returns the
+# name of the first file that cannot be read in `missing`.
+func read_excludes(names: list[string], edits missing: list[string]): list[string] {
+    var out: list[string] = [];
+    for (name in names) {
+        let path = fs_path(name);
+        if (!isFile(path)) {
+            missing.push(name);
+            return out;
+        }
+        for (line in readText(path).split("\n")) {
+            let text = if (line.endsWith("\r")) { line.slice(0, line.len() - 1) } else { line };
+            if (text.len() > 0) {
+                out.push(text.toUpperCase());
+            }
+        }
+    }
+    return out;
+}
+
+func init_error(message: string): int {
+    printErr(message);
+    println(MSG_NONE_COPIED);
+    return EXIT_INIT;
+}
+
+# How a listed file is shown: as typed, or with /F as full source and
+# destination paths.
+func listing(item: Item, full_names: bool, cwd: string): string {
+    if (!full_names) {
+        return item.shown;
+    }
+    if (cwd.len() == 0) {
+        return display_path(item.src) + " -> " + display_path(item.dst);
+    }
+    return display_path(absolute_path(item.src, cwd)) + " -> " + display_path(absolute_path(item.dst, cwd));
+}
+
+pub func run_xcopy(opts: Options): int {
+    var answers = stdin_answers();
+    return xcopy_with(opts, edits: answers);
+}
+
+# run_xcopy with the prompt answers given (tests pass answers_from(text)).
+pub func xcopy_with(opts: Options, edits answers: Answers): int {
+    let source = resolve_source(opts.operands[0]);
+    if (source.error.len() > 0) {
+        return init_error(source.error);
+    }
+    var missing: list[string] = [];
+    let excludes = read_excludes(opts.exclude_files, edits: missing);
+    if (missing.len() > 0) {
+        return init_error(msg_cant_read(missing[0]));
+    }
+
+    let cwd = current_dir();
+    let recurse = opts.subdirs or opts.tree_only;
+    let found = collect(source, recurse, opts.hidden, excludes, cwd);
+    if (found.matched == 0 and source.wild) {
+        return init_error("File not found - " + source.pattern);
+    }
+
+    let dest_operand = if (opts.operands.len() > 1) { opts.operands[1] } else { "" };
+    var kind = destination_kind(dest_operand, source, opts.assume_dir);
+    if (kind == KIND_ASK) {
+        let answer = ask(msg_file_or_dir(display_path(dest_operand)), "FD", edits: answers);
+        if (answer.len() == 0) {
+            return EXIT_ABORTED;
+        }
+        kind = if (answer == "D") { KIND_DIR } else { KIND_FILE };
+    }
+    let dest = strip_trailing_separators(fs_path(dest_operand));
+    let dest_is_dir = kind == KIND_DIR;
+    if (recurse and dest_is_dir and cwd.len() > 0
+        and is_within(absolute_path(dest, cwd), absolute_path(source.base, cwd))) {
+        return init_error(MSG_CYCLIC);
+    }
+
+    var items: list[Item] = [];
+    for (item in plan_items(source, found.files, dest, dest_is_dir)) {
+        if (cwd.len() > 0 and absolute_path(item.src, cwd) == absolute_path(item.dst, cwd)) {
+            return init_error(MSG_ONTO_ITSELF);
+        }
+        if (!opts.update_only or isFile(item.dst)) {
+            items.push(item);
+        }
+    }
+
+    # Directories: the destination, every walked directory with /E, and
+    # with /T the ones that would hold files.
+    var errors = 0;
+    if (!opts.list_only and dest_is_dir) {
+        var wanted: list[string] = [dest];
+        if (opts.empty_dirs or opts.tree_only) {
+            let rels = if (opts.empty_dirs) { found.dirs } else { found.file_dirs };
+            for (rel in rels) {
+                wanted.push(under(dest, rel));
+            }
+        }
+        for (dir in wanted) {
+            if (errors == 0 and !make_dir(dir)) {
+                printErr(msg_unable_dir(display_path(dir)));
+                errors += 1;
+            }
+        }
+    }
+    if (opts.tree_only or (errors > 0 and !opts.keep_going)) {
+        println(MSG_NONE_COPIED);
+        return if (errors > 0) { EXIT_WRITE } else { EXIT_OK };
+    }
+
+    var copied = 0;
+    var overwrite = opts.overwrite;
+    for (item in items) {
+        if (!opts.list_only and overwrite == OVERWRITE_ASK and isFile(item.dst)) {
+            let answer = ask(msg_overwrite(display_path(item.dst)), "YNA", edits: answers);
+            if (answer.len() == 0) {
+                return EXIT_ABORTED;
+            }
+            if (answer == "N") {
+                continue;
+            }
+            if (answer == "A") {
+                overwrite = OVERWRITE_ALL;
+            }
+        }
+        if (!opts.quiet) {
+            println(listing(item, opts.full_names, cwd));
+        }
+        if (opts.list_only) {
+            copied += 1;
+            continue;
+        }
+        let err = copy_file(item.src, item.dst);
+        if (err.len() > 0) {
+            printErr(err);
+            errors += 1;
+            if (!opts.keep_going) {
+                break;
+            }
+            continue;
+        }
+        copied += 1;
+    }
+    println(count_line(copied, opts.list_only));
+    if (errors > 0) {
+        return EXIT_WRITE;
+    }
+    if (items.len() == 0) {
+        return EXIT_NO_FILES;
+    }
+    return EXIT_OK;
+}

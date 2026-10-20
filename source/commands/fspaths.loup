@@ -1,0 +1,68 @@
+@mode(host.dual)
+
+# Path helpers xcopy needs beyond win/paths.loup: absolute paths (for /F,
+# /EXCLUDE and the cyclic-copy check) and hidden names.
+
+from io.proc import (output);
+from win.paths import (fs_path, is_absolute_path, join_path);
+
+# The current directory, absolute, in fs form ("" if it cannot be found).
+# Loup 1.26.0 has no cwd() in native builds, so this asks `pwd`, which also
+# works when the PWD variable is missing or stale.
+pub func current_dir(): string {
+    var text = output(["pwd"]);
+    while (text.endsWith("\n") or text.endsWith("\r")) {
+        text = text.slice(0, text.len() - 1);
+    }
+    if (is_absolute_path(text)) {
+        return text;
+    }
+    return env("PWD") ?? "";
+}
+
+# `path` (either separator) as an absolute, normalised fs path against the
+# directory `cwd`: `.` and `..` resolved, no separator at the end.
+pub func absolute_path(path: string, cwd: string): string {
+    let p = fs_path(path);
+    let full = if (is_absolute_path(p)) { p } else { cwd + "/" + p };
+    var parts: list[string] = [];
+    for (part in full.split("/")) {
+        if (part.len() == 0 or part == ".") {
+            continue;
+        }
+        if (part == "..") {
+            if (parts.len() > 0) {
+                parts.pop();
+            }
+            continue;
+        }
+        parts.push(part);
+    }
+    return "/" + parts.join("/");
+}
+
+# Whether the absolute path `inner` is `outer` or below it.
+pub func is_within(inner: string, outer: string): bool {
+    if (outer == "/") {
+        return true;
+    }
+    return inner == outer or inner.startsWith(outer + "/");
+}
+
+# Whether a name counts as hidden: Linux's dot-files stand in for Windows'
+# hidden attribute.
+pub func is_hidden_name(name: string): bool {
+    return name.startsWith(".") and name != "." and name != "..";
+}
+
+# `rel` below `base` (fs form); either may be "" (the current directory, or
+# the base itself).
+pub func under(base: string, rel: string): string {
+    if (rel.len() == 0) {
+        return base;
+    }
+    if (base.len() == 0) {
+        return fs_path(rel);
+    }
+    return join_path(base, rel);
+}

@@ -1,64 +1,69 @@
 @mode(host.dual)
 
 from debug.assert import (expect, expectEq);
-from cli.args import (parse_args, DEFAULT_GREETING);
+from cli.args import (parse_args, operand_error, copycmd_overwrite, OVERWRITE_ASK, OVERWRITE_ALL,
+    MSG_INVALID_PARAMETERS);
 
-func test_no_arguments(): void {
+func test_defaults(): void {
+    let opts = parse_args(["src", "dst"], "").unwrap();
+    expect(!opts.subdirs and !opts.empty_dirs and !opts.assume_dir, "no /S /E /I");
+    expect(!opts.quiet and !opts.full_names and !opts.list_only and !opts.tree_only, "no /Q /F /L /T");
+    expect(!opts.keep_going and !opts.hidden and !opts.update_only, "no /C /H /U");
+    expectEq(opts.overwrite, OVERWRITE_ASK, "asks before overwriting");
+    expectEq(opts.exclude_files.len(), 0, "no exclusions");
+    expectEq(opts.operands.join(","), "src,dst", "operands");
+}
+
+func test_switches(): void {
+    let opts = parse_args(["/s", "-I", "src", "/Q", "dst", "/f", "/l", "/c", "/h", "/u"], "").unwrap();
+    expect(opts.subdirs and opts.assume_dir and opts.quiet and opts.full_names, "/s -I /Q /f");
+    expect(opts.list_only and opts.keep_going and opts.hidden and opts.update_only, "/l /c /h /u");
+    expectEq(opts.operands.join(","), "src,dst", "operands between switches");
+}
+
+func test_e_implies_s(): void {
+    let opts = parse_args(["/E", "a"], "").unwrap();
+    expect(opts.subdirs and opts.empty_dirs, "/E");
+    expect(parse_args(["/T", "a"], "").unwrap().tree_only, "/T");
+    expect(parse_args(["/S/E/I", "a"], "").unwrap().assume_dir, "/S/E/I");
+}
+
+func test_overwrite(): void {
+    expectEq(parse_args(["/Y", "a"], "").unwrap().overwrite, OVERWRITE_ALL, "/Y");
+    expectEq(parse_args(["/Y", "/-Y", "a"], "").unwrap().overwrite, OVERWRITE_ASK, "/-Y last");
+    expectEq(parse_args(["a"], "/Y").unwrap().overwrite, OVERWRITE_ALL, "COPYCMD=/Y");
+    expectEq(parse_args(["/-y", "a"], "/Y").unwrap().overwrite, OVERWRITE_ASK, "command line wins");
+    expectEq(copycmd_overwrite("/e /y", OVERWRITE_ASK), OVERWRITE_ALL, "among others");
+    expectEq(copycmd_overwrite("", OVERWRITE_ALL), OVERWRITE_ALL, "fallback");
+    expectEq(copycmd_overwrite("/Y /-Y", OVERWRITE_ALL), OVERWRITE_ASK, "last counts");
+}
+
+func test_exclude(): void {
+    let opts = parse_args(["/EXCLUDE:a.txt+b.txt", "src", "/exclude:c"], "").unwrap();
+    expectEq(opts.exclude_files.join(","), "a.txt,b.txt,c", "every file");
+    expect(parse_args(["src", "/EXCLUDE"], "").is_err(), "no value");
+    expectEq(parse_args(["src", "/EXCLUDE"], "").unwrap_err(), "Invalid switch - /EXCLUDE", "message");
+}
+
+func test_operand_errors(): void {
     let none: list[string] = [];
-    let opts = parse_args(none).unwrap();
-    expectEq(opts.command, "", "no command");
-    expectEq(opts.operands.len(), 0, "no operands");
-    expectEq(opts.greeting, DEFAULT_GREETING, "default greeting");
-    expect(!opts.help and !opts.version and !opts.verbose and !opts.shout, "no flags set");
+    expectEq(operand_error(none), MSG_INVALID_PARAMETERS, "none");
+    expectEq(operand_error(["a"]), "", "one");
+    expectEq(operand_error(["a", "b"]), "", "two");
+    expectEq(operand_error(["a", "b", "c"]), MSG_INVALID_PARAMETERS, "three");
+    expectEq(operand_error(["a", "b", "/Z"]), "Invalid switch - /Z", "unknown switch");
+    expectEq(operand_error(["a", "b", "-k", "/Z"]), "Invalid switch - -k", "the first one");
 }
 
-func test_command_and_operands(): void {
-    let opts = parse_args(["hello", "Ann"]).unwrap();
-    expectEq(opts.command, "hello", "command");
-    expectEq(opts.operands.len(), 1, "one operand");
-    expectEq(opts.operands[0], "Ann", "operand");
-}
-
-func test_flags_anywhere(): void {
-    let opts = parse_args(["-v", "hello", "--shout", "Ann"]).unwrap();
-    expect(opts.verbose, "verbose");
-    expect(opts.shout, "shout");
-    expectEq(opts.command, "hello", "command");
-    expectEq(opts.operands[0], "Ann", "operand");
+func test_unknown_switch_is_an_operand(): void {
+    let opts = parse_args(["/tmp/src", "/Z"], "").unwrap();
+    expectEq(opts.operands.join(","), "/tmp/src,/Z", "operands");
 }
 
 func test_help_and_version(): void {
-    expect(parse_args(["--help"]).unwrap().help, "--help");
-    expect(parse_args(["-h"]).unwrap().help, "-h");
-    expect(parse_args(["--version"]).unwrap().version, "--version");
-    expect(parse_args(["-V"]).unwrap().version, "-V");
-}
-
-func test_value_option_forms(): void {
-    expectEq(parse_args(["-g", "Hi"]).unwrap().greeting, "Hi", "-g VALUE");
-    expectEq(parse_args(["--greeting", "Hi"]).unwrap().greeting, "Hi", "--greeting VALUE");
-    expectEq(parse_args(["--greeting=a=b"]).unwrap().greeting, "a=b", "--greeting=VALUE keeps '='");
-}
-
-func test_double_dash_ends_options(): void {
-    let opts = parse_args(["hello", "--", "--shout"]).unwrap();
-    expect(!opts.shout, "--shout after -- is an operand");
-    expectEq(opts.operands[0], "--shout", "operand");
-}
-
-func test_lone_dash_is_operand(): void {
-    let opts = parse_args(["hello", "-"]).unwrap();
-    expectEq(opts.operands[0], "-", "operand");
-}
-
-func test_unknown_option(): void {
-    expectEq(parse_args(["--nope"]).unwrap_err(), "unknown option '--nope'", "error message");
-}
-
-func test_missing_value(): void {
-    expectEq(parse_args(["-g"]).unwrap_err(), "option '-g' requires a value", "error message");
-}
-
-func test_flag_with_value(): void {
-    expectEq(parse_args(["--shout=1"]).unwrap_err(), "option '--shout' does not take a value", "error message");
+    expect(parse_args(["/?"], "").unwrap().help, "/?");
+    expect(parse_args(["src", "-?"], "").unwrap().help, "-?");
+    expect(parse_args(["--version"], "").unwrap().version, "--version");
+    let after = parse_args(["--", "/S"], "").unwrap();
+    expect(!after.subdirs, "/S after -- is a path");
 }

@@ -1,0 +1,53 @@
+@mode(host.dual)
+
+# Answers to xcopy's prompts (`Overwrite X (Yes/No/All)?`, `Does X specify
+# a file name or directory name...?`). Loup 1.26.0 can only read standard
+# input whole, so the first prompt reads all of it and each prompt then
+# takes the next line. Pass the Answers as `edits`.
+
+pub struct Answers {
+    pub var lines: list[string];
+    pub var next: int;
+    pub var loaded: bool;
+}
+
+# Answers read from standard input when first needed.
+pub func stdin_answers(): Answers {
+    let none: list[string] = [];
+    return Answers(lines = none, next = 0, loaded = false);
+}
+
+# Answers taken from a text (for tests).
+pub func answers_from(text: string): Answers {
+    return Answers(lines = text.split("\n"), next = 0, loaded = true);
+}
+
+func load(edits a: Answers): void {
+    if (!a.loaded) {
+        a.lines = readText("/dev/stdin").split("\n");
+        a.loaded = true;
+    }
+}
+
+# Whether another answer is available. A last empty line (after the final
+# line end) does not count.
+pub func has_answer(edits a: Answers): bool {
+    load(edits: a);
+    if (a.next >= a.lines.len()) {
+        return false;
+    }
+    return !(a.next == a.lines.len() - 1 and a.lines[a.next].len() == 0);
+}
+
+# The next answer's first character other than a space ("" for a blank
+# line). Call has_answer() first.
+pub func take_answer(edits a: Answers): string {
+    let line = a.lines[a.next];
+    a.next += 1;
+    for (ch in line) {
+        if (ch != " " and ch != "\t" and ch != "\r") {
+            return ch;
+        }
+    }
+    return "";
+}

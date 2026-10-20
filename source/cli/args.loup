@@ -1,98 +1,138 @@
 @mode(host.dual)
 
-# Command-line parsing. Loup 1.26 has no CLI library, so arguments are
-# parsed by hand into an Options value.
-#
-# Grammar: [OPTIONS] COMMAND [OPERANDS...]
-#   Options may appear anywhere before `--`; everything after `--` is an
-#   operand. Value options accept `--name VALUE` and `--name=VALUE`.
+# Command-line parsing for xcopy, with the shared Windows switch parser
+# (win/switches.loup). `/Y` and `/-Y` can also come from the COPYCMD
+# environment variable, which the command line overrides.
 
-pub const DEFAULT_GREETING: string = "Hello";
+from win.switches import (SwitchArgs, SwitchSpec, flag, required_value, parse_switches, has_switch,
+    switch_values);
 
+pub const MSG_INVALID_PARAMETERS: string = "Invalid number of parameters";
+
+# Overwrite modes.
+pub const OVERWRITE_ASK: int = 0;    # /-Y (the default)
+pub const OVERWRITE_ALL: int = 1;    # /Y
+
+# Fields are `var` so that tests can adjust default_options().
 pub struct Options {
-    pub command: string;
-    pub operands: list[string];
-    pub help: bool;
-    pub version: bool;
-    pub verbose: bool;
-    pub shout: bool;
-    pub greeting: string;
+    pub var help: bool;
+    pub var version: bool;
+    pub var subdirs: bool;            # /S
+    pub var empty_dirs: bool;         # /E
+    pub var assume_dir: bool;         # /I
+    pub var overwrite: int;           # /Y, /-Y, COPYCMD
+    pub var quiet: bool;              # /Q
+    pub var full_names: bool;         # /F
+    pub var list_only: bool;          # /L
+    pub var tree_only: bool;          # /T
+    pub var exclude_files: list[string];  # /EXCLUDE:file1+file2
+    pub var keep_going: bool;         # /C
+    pub var hidden: bool;             # /H
+    pub var update_only: bool;        # /U
+    pub var operands: list[string];
 }
 
-pub func parse_args(argv: list[string]): Result[Options, string] {
-    var command = "";
-    var operands: list[string] = [];
-    var help = false;
-    var version = false;
-    var verbose = false;
-    var shout = false;
-    var greeting = DEFAULT_GREETING;
-    var only_operands = false;
+# Options with xcopy's defaults; for tests.
+pub func default_options(operands: list[string]): Options {
+    let none: list[string] = [];
+    return Options(help = false, version = false, subdirs = false, empty_dirs = false,
+        assume_dir = false, overwrite = OVERWRITE_ASK, quiet = false, full_names = false,
+        list_only = false, tree_only = false, exclude_files = none, keep_going = false,
+        hidden = false, update_only = false, operands = operands);
+}
 
-    var i = 0;
-    while (i < argv.len()) {
-        let arg = argv[i];
-        i += 1;
+# The switches xcopy declares.
+pub func xcopy_switches(): list[SwitchSpec] {
+    return [
+        flag("S"), flag("E"), flag("I"), flag("Y"), flag("-Y"), flag("Q"), flag("F"), flag("L"),
+        flag("T"), flag("C"), flag("H"), flag("U"),
+        required_value("EXCLUDE"),
+    ];
+}
 
-        if (only_operands or arg == "-" or !arg.startsWith("-")) {
-            if (command.is_empty()) {
-                command = arg;
-            } else {
-                operands.push(arg);
-            }
-            continue;
-        }
-        if (arg == "--") {
-            only_operands = true;
-            continue;
-        }
-
-        # Split `--name=value` into its name and inline value.
-        var name = arg;
-        var inline_value: Option[string] = None;
-        if (arg.startsWith("--") and arg.contains("=")) {
-            let parts = arg.split("=");
-            name = parts[0];
-            inline_value = Some(parts.slice(1).join("="));
-        }
-
-        if (name == "-g" or name == "--greeting") {
-            match inline_value {
-                Some(v) => { greeting = v; },
-                None => {
-                    if (i >= argv.len()) {
-                        return Err(i"option '{$ name $}' requires a value");
-                    }
-                    greeting = argv[i];
-                    i += 1;
-                },
-            }
-            continue;
-        }
-
-        if (inline_value.is_some()) {
-            return Err(i"option '{$ name $}' does not take a value");
-        }
-        if (name == "-h" or name == "--help") {
-            help = true;
-        } else if (name == "-V" or name == "--version") {
-            version = true;
-        } else if (name == "-v" or name == "--verbose") {
-            verbose = true;
-        } else if (name == "--shout") {
-            shout = true;
-        } else {
-            return Err(i"unknown option '{$ name $}'");
+# The overwrite mode that COPYCMD presets (`/Y` or `/-Y` in it; the last
+# one counts), or `fallback`.
+pub func copycmd_overwrite(copycmd: string, fallback: int): int {
+    var mode = fallback;
+    for (word in copycmd.split(" ")) {
+        let w = word.toUpperCase();
+        if (w == "/Y" or w == "-Y") {
+            mode = OVERWRITE_ALL;
+        } else if (w == "/-Y" or w == "--Y") {
+            mode = OVERWRITE_ASK;
         }
     }
+    return mode;
+}
 
+func overwrite_of(parsed: SwitchArgs, preset: int): int {
+    var mode = preset;
+    for (sw in parsed.switches) {
+        if (sw.name == "Y") {
+            mode = OVERWRITE_ALL;
+        } else if (sw.name == "-Y") {
+            mode = OVERWRITE_ASK;
+        }
+    }
+    return mode;
+}
+
+# The exclusion files of every /EXCLUDE:a+b switch, in order.
+func exclude_files_of(parsed: SwitchArgs): list[string] {
+    var out: list[string] = [];
+    for (value in switch_values(parsed, "EXCLUDE")) {
+        for (name in value.split("+")) {
+            if (name.len() > 0) {
+                out.push(name);
+            }
+        }
+    }
+    return out;
+}
+
+# Parses the command line; `copycmd` is the value of the COPYCMD variable.
+# The statement form of `match` (arms that return) is deliberate: a match
+# expression whose arms build new values returns freed memory natively.
+pub func parse_args(argv: list[string], copycmd: string): Result[Options, string] {
+    let parsed = match parse_switches(argv, xcopy_switches()) {
+        Ok(p) => p,
+        Err(e) => {
+            return Err("Invalid switch - " + e.text);
+        },
+    };
     return Ok(Options(
-        command = command,
-        operands = operands,
-        help = help,
-        version = version,
-        verbose = verbose,
-        shout = shout,
-        greeting = greeting,
+        help = parsed.help,
+        version = parsed.version,
+        subdirs = has_switch(parsed, "S") or has_switch(parsed, "E"),
+        empty_dirs = has_switch(parsed, "E"),
+        assume_dir = has_switch(parsed, "I"),
+        overwrite = overwrite_of(parsed, copycmd_overwrite(copycmd, OVERWRITE_ASK)),
+        quiet = has_switch(parsed, "Q"),
+        full_names = has_switch(parsed, "F"),
+        list_only = has_switch(parsed, "L"),
+        tree_only = has_switch(parsed, "T"),
+        exclude_files = exclude_files_of(parsed),
+        keep_going = has_switch(parsed, "C"),
+        hidden = has_switch(parsed, "H"),
+        update_only = has_switch(parsed, "U"),
+        operands = parsed.operands,
     ));
+}
+
+# The usage error for the operands, or "" when there are one or two. A
+# third argument that looks like a switch is reported as one.
+pub func operand_error(operands: list[string]): string {
+    if (operands.len() == 0) {
+        return MSG_INVALID_PARAMETERS;
+    }
+    if (operands.len() > 2) {
+        for (k in 2..operands.len()) {
+            let op = operands[k];
+            if (op.len() > 1 and (op.startsWith("/") or op.startsWith("-"))) {
+                return "Invalid switch - " + op;
+            }
+        }
+        return MSG_INVALID_PARAMETERS;
+    }
+    return "";
 }

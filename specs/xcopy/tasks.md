@@ -1,0 +1,22 @@
+# Tasks: xcopy
+
+- [x] 1. Copy the shared Windows code into `source/win/` with its tests
+  - _Requirements: 1.1, 5.6_
+- [x] 2. Parse xcopy's command line, COPYCMD, operand checks
+  - _Requirements: 3.2, 5.1, 5.6_
+- [x] 3. Resolve the source; walk it with /S, /E, /H and /EXCLUDE
+  - _Requirements: 1.1, 1.2, 1.5, 1.6, 5.2_
+- [x] 4. Destination kinds, the F/D question, /I
+  - _Requirements: 2.1, 2.2, 2.3, 2.4_
+- [x] 5. Cyclic-copy and onto-itself checks
+  - _Requirements: 5.3_
+- [x] 6. Copy with checks after each write; /C; /U
+  - _Requirements: 1.7, 1.8, 5.4_
+- [x] 7. Overwrite questions with answers from standard input
+  - _Requirements: 3.1, 3.3, 3.4_
+- [x] 8. Listing, /F, /Q, /L, /T and the count line
+  - _Requirements: 1.3, 1.4, 4.1, 4.2, 4.3_
+- [x] 9. Exit statuses
+  - _Requirements: 5.5_
+- [x] 10. Unit tests and end-to-end tests of the native binary
+  - _Requirements: all_

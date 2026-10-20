@@ -1,0 +1,47 @@
+@mode(host.dual)
+
+from debug.assert import (expect, expectEq);
+from commands.fspaths import (current_dir, absolute_path, is_within, is_hidden_name, under);
+from commands.answers import (Answers, answers_from, has_answer, take_answer);
+
+func test_absolute_path(): void {
+    expectEq(absolute_path("a/b", "/w"), "/w/a/b", "relative");
+    expectEq(absolute_path("a\\b\\", "/w"), "/w/a/b", "backslashes and a trailing one");
+    expectEq(absolute_path("./a/../b", "/w/x"), "/w/x/b", ". and ..");
+    expectEq(absolute_path("/t//u", "/w"), "/t/u", "absolute");
+    expectEq(absolute_path("", "/w"), "/w", "empty is the directory");
+    expectEq(absolute_path("../../..", "/w"), "/", "above the root");
+}
+
+func test_is_within(): void {
+    expect(is_within("/w/src/sub", "/w/src"), "below");
+    expect(is_within("/w/src", "/w/src"), "the same");
+    expect(!is_within("/w/src2", "/w/src"), "a sibling with the same prefix");
+    expect(is_within("/x", "/"), "the root holds everything");
+}
+
+func test_current_dir(): void {
+    let cwd = current_dir();
+    expect(cwd.startsWith("/"), "absolute");
+}
+
+func test_hidden_and_under(): void {
+    expect(is_hidden_name(".git"), ".git");
+    expect(!is_hidden_name("a.txt"), "a.txt");
+    expect(!is_hidden_name(".") and !is_hidden_name(".."), ". and ..");
+    expectEq(under("", "a"), "a", "no base");
+    expectEq(under("src", ""), "src", "no rel");
+    expectEq(under("src", "sub\\a"), "src/sub/a", "both");
+}
+
+func test_answers(): void {
+    var a = answers_from("  y\n\nAll\n");
+    expect(has_answer(edits: a), "first");
+    expectEq(take_answer(edits: a), "y", "spaces skipped");
+    expect(has_answer(edits: a), "second");
+    expectEq(take_answer(edits: a), "", "blank line");
+    expectEq(take_answer(edits: a), "A", "first letter");
+    expect(!has_answer(edits: a), "the final line end is not an answer");
+    var none = answers_from("");
+    expect(!has_answer(edits: none), "empty input");
+}
