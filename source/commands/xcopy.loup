@@ -10,10 +10,13 @@
 # Runtime: host.dual. Compiled into the native binary build/xcopy by `make
 # build`; `loup run source/main.loup` interprets the same code.
 #
-# Structure: messages; ask, the prompt loop; make_dir and copy_file, which
-# verify what they did; reading the /EXCLUDE files; and xcopy_with, the run:
-# resolve and walk the source, settle the destination, plan the items, create
-# the directories, then copy (or list) each file.
+# Structure: messages; the exceptions (XcopyError and its InitError,
+# AbortError and WriteError, each with the ERRORLEVEL it ends the run
+# with); ask, the prompt loop; make_dir and copy_file, which verify what
+# they did; reading the /EXCLUDE files; copy_tree, the run: resolve and
+# walk the source, settle the destination, plan the items, create the
+# directories, then copy (or list) each file; and xcopy_with, which turns
+# an exception that ends the run into its ERRORLEVEL.
 
 from appinfo import (EXIT_OK, EXIT_NO_FILES, EXIT_ABORTED, EXIT_INIT, EXIT_WRITE);
 from cli.args import (Options, OVERWRITE_ASK, OVERWRITE_ALL);
@@ -57,24 +60,57 @@ pub func msg_creation_error(reason: string): string {
     return "File creation error - " + reason;
 }
 
+# xcopy's failures, each carrying the ERRORLEVEL it ends the run with.
+# They are declared in the only module that throws them: natively, a custom
+# exception thrown from another module than its own is unreliable.
+pub class XcopyError : Exception {
+    pub let level: int;
+
+    new(message: string, level: int) {
+        super(message);
+        this.level = level;
+    }
+}
+
+# Nothing could be copied: a missing source, an unreadable /EXCLUDE file, a
+# cyclic copy, ... (ERRORLEVEL 4).
+pub class InitError : XcopyError {
+    new(message: string) {
+        super(message, EXIT_INIT);
+    }
+}
+
+# The input ended at a prompt, as Ctrl+C would on Windows (ERRORLEVEL 2).
+pub class AbortError : XcopyError {
+    new() {
+        super("", EXIT_ABORTED);
+    }
+}
+
+# A file or directory could not be written (ERRORLEVEL 5).
+pub class WriteError : XcopyError {
+    new(message: string) {
+        super(message, EXIT_WRITE);
+    }
+}
+
 # Prints a prompt until the answer is one of `choices` (upper-case letters)
-# and returns that letter, or "" when the input has ended. The answer is
-# echoed, as the console would.
+# and returns that letter. The answer is echoed, as the console would. The
+# question is always shown once, hence do/while; when the input has ended
+# it throws AbortError.
 pub func ask(question: string, choices: string, edits answers: Answers): string {
-    while (true) {
+    var up = "";
+    do {
         print(question);
         if (!has_answer(edits: answers)) {
             println("");
-            return "";
+            throw AbortError();
         }
         let answer = take_answer(edits: answers);
         println(answer);
-        let up = answer.toUpperCase();
-        if (up.len() > 0 and choices.index_of(up) >= 0) {
-            return up;
-        }
-    }
-    return "";
+        up = answer.toUpperCase();
+    } while (up.len() == 0 or choices.index_of(up) < 0);
+    return up;
 }
 
 # Creates a directory (and its parents); whether it exists afterwards.
@@ -84,41 +120,42 @@ pub func make_dir(path: string): bool {
     }
     try {
         createDir(path);
-    } catch (Exception as e) {
+    } catch {
         return false;
     }
     return isDir(path);
 }
 
-# Copies one file, creating its directory. Returns "" or the error message.
-pub func copy_file(src: string, dst: string): string {
+# Copies one file, creating its directory, or throws WriteError with
+# xcopy's message.
+pub func copy_file(src: string, dst: string): void {
     let parent = parent_dir(dst);
     if (!make_dir(parent)) {
-        return msg_unable_dir(display_path(parent));
+        throw WriteError(msg_unable_dir(display_path(parent)));
     }
     if (isDir(dst)) {
-        return msg_creation_error(MSG_ACCESS_DENIED);
+        throw WriteError(msg_creation_error(MSG_ACCESS_DENIED));
     }
     try {
         copy(src, dst);
     } catch (Exception as e) {
-        return msg_creation_error(MSG_ACCESS_DENIED);
+        # Stage0's io.fs throws; keep its error as the cause.
+        throw WriteError(msg_creation_error(MSG_ACCESS_DENIED)) from e;
     }
+    # Native io.fs fails silently: check the result.
     if (!isFile(dst)) {
-        return msg_creation_error(MSG_ACCESS_DENIED);
+        throw WriteError(msg_creation_error(MSG_ACCESS_DENIED));
     }
-    return "";
 }
 
-# Reads the /EXCLUDE files: their non-empty lines, upper case. Returns the
-# name of the first file that cannot be read in `missing`.
-func read_excludes(names: list[string], edits missing: list[string]): list[string] {
+# Reads the /EXCLUDE files: their non-empty lines, upper case. A file that
+# cannot be read ends the run.
+func read_excludes(names: list[string]): list[string] {
     var out: list[string] = [];
     for (name in names) {
         let path = fs_path(name);
         if (!isFile(path)) {
-            missing.push(name);
-            return out;
+            throw InitError(msg_cant_read(name));
         }
         for (line in readText(path).split("\n")) {
             let text = if (line.endsWith("\r")) { line.slice(0, line.len() - 1) } else { line };
@@ -128,12 +165,6 @@ func read_excludes(names: list[string], edits missing: list[string]): list[strin
         }
     }
     return out;
-}
-
-func init_error(message: string): int {
-    printErr(message);
-    println(MSG_NONE_COPIED);
-    return EXIT_INIT;
 }
 
 # How a listed file is shown: as typed, or with /F as full source and
@@ -154,16 +185,26 @@ pub func run_xcopy(opts: Options): int {
 }
 
 # run_xcopy with the prompt answers given (tests pass answers_from(text)).
+# An InitError prints its message and `0 File(s) copied`; an AbortError
+# ends the run silently.
 pub func xcopy_with(opts: Options, edits answers: Answers): int {
+    try {
+        return copy_tree(opts, edits: answers);
+    } catch (InitError as e) {
+        printErr(e.message);
+        println(MSG_NONE_COPIED);
+        return e.level;
+    } catch (XcopyError as e) {
+        return e.level;
+    }
+}
+
+func copy_tree(opts: Options, edits answers: Answers): int {
     let source = resolve_source(opts.operands[0]);
     if (source.error.len() > 0) {
-        return init_error(source.error);
+        throw InitError(source.error);
     }
-    var missing: list[string] = [];
-    let excludes = read_excludes(opts.exclude_files, edits: missing);
-    if (missing.len() > 0) {
-        return init_error(msg_cant_read(missing[0]));
-    }
+    let excludes = read_excludes(opts.exclude_files);
 
     # Walk the source. A wildcard or file name that matched nothing ends the
     # run; a directory with nothing to copy does not.
@@ -171,7 +212,7 @@ pub func xcopy_with(opts: Options, edits answers: Answers): int {
     let recurse = opts.subdirs or opts.tree_only;
     let found = collect(source, recurse, opts.hidden, excludes, cwd);
     if (found.matched == 0 and source.wild) {
-        return init_error("File not found - " + source.pattern);
+        throw InitError("File not found - " + source.pattern);
     }
 
     # Settle the destination: a directory or a file, asking when xcopy
@@ -180,16 +221,13 @@ pub func xcopy_with(opts: Options, edits answers: Answers): int {
     var kind = destination_kind(dest_operand, source, opts.assume_dir);
     if (kind == KIND_ASK) {
         let answer = ask(msg_file_or_dir(display_path(dest_operand)), "FD", edits: answers);
-        if (answer.len() == 0) {
-            return EXIT_ABORTED;
-        }
         kind = if (answer == "D") { KIND_DIR } else { KIND_FILE };
     }
     let dest = strip_trailing_separators(fs_path(dest_operand));
     let dest_is_dir = kind == KIND_DIR;
     if (recurse and dest_is_dir and cwd.len() > 0
         and is_within(absolute_path(dest, cwd), absolute_path(source.base, cwd))) {
-        return init_error(MSG_CYCLIC);
+        throw InitError(MSG_CYCLIC);
     }
 
     # The copy list, with /U applied. Any file onto itself stops the run
@@ -197,7 +235,7 @@ pub func xcopy_with(opts: Options, edits answers: Answers): int {
     var items: list[Item] = [];
     for (item in plan_items(source, found.files, dest, dest_is_dir)) {
         if (cwd.len() > 0 and absolute_path(item.src, cwd) == absolute_path(item.dst, cwd)) {
-            return init_error(MSG_ONTO_ITSELF);
+            throw InitError(MSG_ONTO_ITSELF);
         }
         if (!opts.update_only or isFile(item.dst)) {
             items.push(item);
@@ -228,15 +266,13 @@ pub func xcopy_with(opts: Options, edits answers: Answers): int {
     }
 
     # Copy (or with /L only list) each item. An `All` answer turns the
-    # overwrite prompts off for the rest of the run.
+    # overwrite prompts off for the rest of the run; a WriteError is
+    # reported and, without /C, ends the copying.
     var copied = 0;
     var overwrite = opts.overwrite;
     for (item in items) {
         if (!opts.list_only and overwrite == OVERWRITE_ASK and isFile(item.dst)) {
             let answer = ask(msg_overwrite(display_path(item.dst)), "YNA", edits: answers);
-            if (answer.len() == 0) {
-                return EXIT_ABORTED;
-            }
             if (answer == "N") {
                 continue;
             }
@@ -251,16 +287,16 @@ pub func xcopy_with(opts: Options, edits answers: Answers): int {
             copied += 1;
             continue;
         }
-        let err = copy_file(item.src, item.dst);
-        if (err.len() > 0) {
-            printErr(err);
+        try {
+            copy_file(item.src, item.dst);
+            copied += 1;
+        } catch (WriteError as e) {
+            printErr(e.message);
             errors += 1;
             if (!opts.keep_going) {
                 break;
             }
-            continue;
         }
-        copied += 1;
     }
     println(count_line(copied, opts.list_only));
     if (errors > 0) {

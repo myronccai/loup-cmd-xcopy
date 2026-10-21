@@ -51,4 +51,4 @@ ci: check test build e2e
 	$(BIN) --version
 
 clean:
-	rm -rf $(BUILD_DIR) .temp
+	rm -rf $(BUILD_DIR) .temp .loup-cache

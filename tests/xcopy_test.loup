@@ -15,7 +15,7 @@ from appinfo import (EXIT_OK, EXIT_NO_FILES, EXIT_ABORTED, EXIT_INIT, EXIT_WRITE
 from cli.args import (Options, default_options, OVERWRITE_ALL);
 from cli.app import (run);
 from commands.answers import (Answers, answers_from);
-from commands.xcopy import (xcopy_with, count_line, msg_file_or_dir, msg_overwrite, copy_file);
+from commands.xcopy import (XcopyError, xcopy_with, count_line, msg_file_or_dir, msg_overwrite, copy_file);
 
 const ROOT: string = "build/tmp/xcopy_run";
 
@@ -57,24 +57,22 @@ func test_copy_tree(): void {
 
 func test_prompts(): void {
     fixture();
-    var opts = default_options([ROOT + "/src/a.txt", ROOT + "/new"]);
+    let opts = default_options([ROOT + "/src/a.txt", ROOT + "/new"]);
     expectEq(with_answers(opts, "d\n"), EXIT_OK, "D: a directory");
     expect(isFile(ROOT + "/new/a.txt"), "into the directory");
-    opts.operands = [ROOT + "/src/a.txt", ROOT + "/file.txt"];
-    expectEq(with_answers(opts, "x\nF\n"), EXIT_OK, "F after an invalid answer");
+    let onto_file = opts with (operands = [ROOT + "/src/a.txt", ROOT + "/file.txt"]);
+    expectEq(with_answers(onto_file, "x\nF\n"), EXIT_OK, "F after an invalid answer");
     expectEq(readText(ROOT + "/file.txt"), "a", "onto the name");
-    expectEq(with_answers(opts, "y\n"), EXIT_OK, "an existing file: only the overwrite question");
-    opts.operands = [ROOT + "/src/a.txt", ROOT + "/other"];
-    expectEq(with_answers(opts, ""), EXIT_ABORTED, "no answer");
+    expectEq(with_answers(onto_file, "y\n"), EXIT_OK, "an existing file: only the overwrite question");
+    let other = opts with (operands = [ROOT + "/src/a.txt", ROOT + "/other"]);
+    expectEq(with_answers(other, ""), EXIT_ABORTED, "no answer");
     writeText(ROOT + "/new/a.txt", "old");
-    opts.operands = [ROOT + "/src/a.txt", ROOT + "/new"];
     expectEq(with_answers(opts, "n\n"), EXIT_OK, "N keeps the file");
     expectEq(readText(ROOT + "/new/a.txt"), "old", "not overwritten");
     expectEq(with_answers(opts, "y\n"), EXIT_OK, "Y overwrites");
     expectEq(readText(ROOT + "/new/a.txt"), "a", "overwritten");
     writeText(ROOT + "/new/a.txt", "old");
-    opts.overwrite = OVERWRITE_ALL;
-    expectEq(with_answers(opts, ""), EXIT_OK, "/Y");
+    expectEq(with_answers(opts with (overwrite = OVERWRITE_ALL), ""), EXIT_OK, "/Y");
     expectEq(readText(ROOT + "/new/a.txt"), "a", "overwritten without a question");
     removeDir(ROOT);
 }
@@ -91,6 +89,14 @@ func test_errors(): void {
     expectEq(run([ROOT + "/src", ROOT + "/d", "/EXCLUDE:" + ROOT + "/none.txt"]), EXIT_INIT, "exclusion file");
     createDir(ROOT + "/blocked/a.txt");
     expectEq(run([ROOT + "/src", ROOT + "/blocked", "/Y"]), EXIT_WRITE, "a directory in the way");
-    expectEq(copy_file(ROOT + "/src/a.txt", ROOT + "/blocked/a.txt"), "File creation error - Access is denied.", "message");
+    var thrown = false;
+    try {
+        copy_file(ROOT + "/src/a.txt", ROOT + "/blocked/a.txt");
+    } catch (XcopyError as e) {
+        thrown = true;
+        expectEq(e.level, EXIT_WRITE, "a WriteError's level");
+        expectEq(e.message, "File creation error - Access is denied.", "message");
+    }
+    expect(thrown, "copy_file throws");
     removeDir(ROOT);
 }

@@ -17,23 +17,23 @@ pub const MSG_INVALID_PARAMETERS: string = "Invalid number of parameters";
 pub const OVERWRITE_ASK: int = 0;    # /-Y (the default)
 pub const OVERWRITE_ALL: int = 1;    # /Y
 
-# Fields are `var` so that tests can adjust default_options().
+# Tests vary default_options() with `with` copies.
 pub struct Options {
-    pub var help: bool;
-    pub var version: bool;
-    pub var subdirs: bool;            # /S
-    pub var empty_dirs: bool;         # /E
-    pub var assume_dir: bool;         # /I
-    pub var overwrite: int;           # /Y, /-Y, COPYCMD
-    pub var quiet: bool;              # /Q
-    pub var full_names: bool;         # /F
-    pub var list_only: bool;          # /L
-    pub var tree_only: bool;          # /T
-    pub var exclude_files: list[string];  # /EXCLUDE:file1+file2
-    pub var keep_going: bool;         # /C
-    pub var hidden: bool;             # /H
-    pub var update_only: bool;        # /U
-    pub var operands: list[string];
+    pub help: bool;
+    pub version: bool;
+    pub subdirs: bool;            # /S
+    pub empty_dirs: bool;         # /E
+    pub assume_dir: bool;         # /I
+    pub overwrite: int;           # /Y, /-Y, COPYCMD
+    pub quiet: bool;              # /Q
+    pub full_names: bool;         # /F
+    pub list_only: bool;          # /L
+    pub tree_only: bool;          # /T
+    pub exclude_files: list[string];  # /EXCLUDE:file1+file2
+    pub keep_going: bool;         # /C
+    pub hidden: bool;             # /H
+    pub update_only: bool;        # /U
+    pub operands: list[string];
 }
 
 # Options with xcopy's defaults; for tests.

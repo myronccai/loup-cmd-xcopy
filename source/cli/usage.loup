@@ -9,28 +9,28 @@ from appinfo import (APP_NAME, APP_VERSION);
 
 # The text of `xcopy /?`: the syntax and a short line per supported switch.
 pub func usage(): string {
-    let lines = [
-        "Copies files and directory trees.",
-        "",
-        "XCOPY source [destination] [/S [/E]] [/T] [/I] [/Y | /-Y] [/Q | /F] [/L]",
-        "      [/C] [/H] [/U] [/EXCLUDE:file1[+file2]...]",
-        "",
-        "  /S         Copy subdirectories too, except empty ones.",
-        "  /E         Copy subdirectories too, including empty ones.",
-        "  /T         Create the directory structure only, without files.",
-        "  /I         Treat a missing destination as a directory when copying",
-        "             a directory or a wildcard.",
-        "  /Y, /-Y    Overwrite without asking, or ask (the default; COPYCMD may",
-        "             preset /Y).",
-        "  /Q         Do not list the files.",
-        "  /F         List full source and destination names.",
-        "  /L         List the files that would be copied; copy nothing.",
-        "  /C         Continue after errors.",
-        "  /H         Copy hidden files (names starting with a dot) too.",
-        "  /U         Copy only files that already exist in the destination.",
-        "  /EXCLUDE   Skip files whose full path contains a line of the files listed.",
-    ];
-    return lines.join("\n");
+    let text = """
+    Copies files and directory trees.
+
+    XCOPY source [destination] [/S [/E]] [/T] [/I] [/Y | /-Y] [/Q | /F] [/L]
+          [/C] [/H] [/U] [/EXCLUDE:file1[+file2]...]
+
+      /S         Copy subdirectories too, except empty ones.
+      /E         Copy subdirectories too, including empty ones.
+      /T         Create the directory structure only, without files.
+      /I         Treat a missing destination as a directory when copying
+                 a directory or a wildcard.
+      /Y, /-Y    Overwrite without asking, or ask (the default; COPYCMD may
+                 preset /Y).
+      /Q         Do not list the files.
+      /F         List full source and destination names.
+      /L         List the files that would be copied; copy nothing.
+      /C         Continue after errors.
+      /H         Copy hidden files (names starting with a dot) too.
+      /U         Copy only files that already exist in the destination.
+      /EXCLUDE   Skip files whose full path contains a line of the files listed.
+    """;
+    return text;
 }
 
 pub func version_line(): string {
