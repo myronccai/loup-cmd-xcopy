@@ -1,6 +1,12 @@
 @mode(host.dual)
 
-# Planning: source resolution, the walk, destinations and the copy list.
+# Unit tests for planning (commands.plan): source resolution, the walk,
+# destinations and the copy list.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this file
+# with Stage0 (`loup-bootstrap test --no-parallel`, source/ on LOUPPATH), one
+# test per `func test_*()`. It is not part of the binary. The tree it plans
+# for is created under build/tmp/ (removed by `make clean`).
 
 from debug.assert import (expect, expectEq);
 from io.fs import (createDir, writeText, removeDir, isDir);

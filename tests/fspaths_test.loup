@@ -1,5 +1,12 @@
 @mode(host.dual)
 
+# Unit tests for xcopy's path helpers (commands.fspaths) and its prompt
+# answers (commands.answers).
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this file
+# with Stage0 (`loup-bootstrap test --no-parallel`, source/ on LOUPPATH), one
+# test per `func test_*()`. It is not part of the binary.
+
 from debug.assert import (expect, expectEq);
 from commands.fspaths import (current_dir, absolute_path, is_within, is_hidden_name, under);
 from commands.answers import (Answers, answers_from, has_answer, take_answer);

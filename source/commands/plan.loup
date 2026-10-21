@@ -13,6 +13,13 @@
 #   /I a missing name when the source is a directory or a wildcard, is a
 #   directory (files keep their path relative to the source); an existing
 #   file is a file; anything else has to be asked (F or D).
+#
+# Runtime: host.dual. Compiled into the native binary build/xcopy by `make
+# build`; `loup run source/main.loup` interprets the same code.
+#
+# Structure: the Source record and resolve_source; the Collected record, the
+# /EXCLUDE test and collect, the walk; the destination kinds; and the Item
+# record with plan_items, the copy list.
 
 from io.fs import (isDir, isFile);
 from win.paths import (display_path, fs_path, split_path, strip_trailing_separators);
@@ -97,6 +104,9 @@ pub func collect(source: Source, recurse: bool, hidden: bool, excludes: list[str
     var matched = 0;
     let base = source.base;
     let pattern = source.pattern;
+    # An explicit stack of directories relative to the base, with their
+    # depths; subdirectories are pushed in reverse so they pop in name
+    # order. A skipped (hidden or excluded) directory is never entered.
     var stack: list[string] = [""];
     var depths: list[int] = [0];
     while (stack.len() > 0) {

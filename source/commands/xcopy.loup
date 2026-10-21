@@ -6,6 +6,14 @@
 #
 # io.fs never reports a failure in native builds (and throws in Stage0), so
 # every directory creation and copy is checked afterwards.
+#
+# Runtime: host.dual. Compiled into the native binary build/xcopy by `make
+# build`; `loup run source/main.loup` interprets the same code.
+#
+# Structure: messages; ask, the prompt loop; make_dir and copy_file, which
+# verify what they did; reading the /EXCLUDE files; and xcopy_with, the run:
+# resolve and walk the source, settle the destination, plan the items, create
+# the directories, then copy (or list) each file.
 
 from appinfo import (EXIT_OK, EXIT_NO_FILES, EXIT_ABORTED, EXIT_INIT, EXIT_WRITE);
 from cli.args import (Options, OVERWRITE_ASK, OVERWRITE_ALL);
@@ -157,6 +165,8 @@ pub func xcopy_with(opts: Options, edits answers: Answers): int {
         return init_error(msg_cant_read(missing[0]));
     }
 
+    # Walk the source. A wildcard or file name that matched nothing ends the
+    # run; a directory with nothing to copy does not.
     let cwd = current_dir();
     let recurse = opts.subdirs or opts.tree_only;
     let found = collect(source, recurse, opts.hidden, excludes, cwd);
@@ -164,6 +174,8 @@ pub func xcopy_with(opts: Options, edits answers: Answers): int {
         return init_error("File not found - " + source.pattern);
     }
 
+    # Settle the destination: a directory or a file, asking when xcopy
+    # cannot tell. Copying a tree into itself would never end.
     let dest_operand = if (opts.operands.len() > 1) { opts.operands[1] } else { "" };
     var kind = destination_kind(dest_operand, source, opts.assume_dir);
     if (kind == KIND_ASK) {
@@ -180,6 +192,8 @@ pub func xcopy_with(opts: Options, edits answers: Answers): int {
         return init_error(MSG_CYCLIC);
     }
 
+    # The copy list, with /U applied. Any file onto itself stops the run
+    # before anything is written.
     var items: list[Item] = [];
     for (item in plan_items(source, found.files, dest, dest_is_dir)) {
         if (cwd.len() > 0 and absolute_path(item.src, cwd) == absolute_path(item.dst, cwd)) {
@@ -213,6 +227,8 @@ pub func xcopy_with(opts: Options, edits answers: Answers): int {
         return if (errors > 0) { EXIT_WRITE } else { EXIT_OK };
     }
 
+    # Copy (or with /L only list) each item. An `All` answer turns the
+    # overwrite prompts off for the rest of the run.
     var copied = 0;
     var overwrite = opts.overwrite;
     for (item in items) {

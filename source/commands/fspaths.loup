@@ -2,6 +2,10 @@
 
 # Path helpers xcopy needs beyond win/paths.loup: absolute paths (for /F,
 # /EXCLUDE and the cyclic-copy check) and hidden names.
+#
+# Runtime: host.dual. Compiled into the native binary build/xcopy by `make
+# build`; `loup run source/main.loup` interprets the same code. current_dir
+# runs `pwd` through io.proc.
 
 from io.proc import (output);
 from win.paths import (fs_path, is_absolute_path, join_path);

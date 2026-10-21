@@ -1,5 +1,10 @@
 @mode(host.dual)
 
+# The help text of xcopy (`xcopy /?`) and its --version line.
+#
+# Runtime: host.dual. Compiled into the native binary build/xcopy by `make
+# build`; `loup run source/main.loup` interprets the same code.
+
 from appinfo import (APP_NAME, APP_VERSION);
 
 # The text of `xcopy /?`: the syntax and a short line per supported switch.

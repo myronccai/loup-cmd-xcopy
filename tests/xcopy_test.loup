@@ -1,7 +1,13 @@
 @mode(host.dual)
 
-# Whole runs (with prompt answers given as text) and their exit statuses.
-# These tests print the program's normal output.
+# Unit tests for whole xcopy runs (commands.xcopy.xcopy_with, with prompt
+# answers given as text) and their exit statuses. These tests print the
+# program's normal output.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this file
+# with Stage0 (`loup-bootstrap test --no-parallel`, source/ on LOUPPATH), one
+# test per `func test_*()`. It is not part of the binary. They copy files
+# under build/tmp/ (removed by `make clean`).
 
 from debug.assert import (expect, expectEq);
 from io.fs import (createDir, writeText, readText, removeDir, isDir, isFile);

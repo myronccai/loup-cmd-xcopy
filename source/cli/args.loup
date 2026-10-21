@@ -3,6 +3,10 @@
 # Command-line parsing for xcopy, with the shared Windows switch parser
 # (win/switches.loup). `/Y` and `/-Y` can also come from the COPYCMD
 # environment variable, which the command line overrides.
+#
+# Runtime: host.dual. Compiled into the native binary build/xcopy by `make
+# build`; `loup run source/main.loup` interprets the same code. The caller
+# reads COPYCMD and passes its value in, so parsing stays a pure function.
 
 from win.switches import (SwitchArgs, SwitchSpec, flag, required_value, parse_switches, has_switch,
     switch_values);

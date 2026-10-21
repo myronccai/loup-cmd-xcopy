@@ -5,6 +5,9 @@
 # alone). cmd.exe does not expand `*` and `?`: each command does it itself,
 # with these functions.
 #
+# Runtime: host.dual. Compiled into each Windows command's native binary by
+# `make build`; `loup run source/main.loup` interprets the same code.
+#
 # Matching follows Win32 (FindFirstFile), which rewrites a pattern into the
 # NT "DOS wildcards" before comparing, case-insensitively:
 #
@@ -23,15 +26,16 @@
 # `a.txtx` via `A~1.TXT`): Linux has no short names.
 
 from io.fs import (listDir, isDir, isFile);
-from win.paths import (PathParts, split_path, join_path);
+from win.paths import (PathParts, fs_path, split_path, join_path);
 
 # Which entries an expansion returns.
 pub const MATCH_FILES: int = 1;
 pub const MATCH_DIRS: int = 2;
 pub const MATCH_ALL: int = 3;
 
-# How deep find_recursive() descends: a guard against symlink loops, which
-# cannot be detected without lstat().
+# How deep walk_dirs() and find_recursive() descend. Symbolic links to
+# directories are not followed (see symlinks_under()), so this is only a
+# last guard, e.g. against bind-mount loops.
 pub const MAX_DEPTH: int = 64;
 
 const T_LIT: int = 0;
@@ -140,14 +144,28 @@ pub func compare_names(a: string, b: string): int {
 }
 
 # A sorted copy of `names` (see compare_names).
+#
+# The list is sorted as keys `UPPER<NUL>name` with a plain comparison, which
+# gives the same order as compare_names (NUL sorts before every character,
+# and no name contains one). A comparator that calls toUpperCase() costs
+# about 5 KB per comparison in native builds of Loup 1.26.0, never freed
+# (sorting a 2,900-name directory took 347 MB); the keys cost one
+# upper-casing per name. The name is taken back with split(), which works
+# on raw bytes, so names that are not valid UTF-8 survive.
 pub func sort_names(names: list[string]): list[string] {
-    var out: list[string] = [];
+    let sep = str(char.of(0));
+    var keyed: list[string] = [];
     for (n in names) {
-        out.push(n);
+        keyed.push(n.toUpperCase() + sep + n);
     }
-    out.sort(func(a: string, b: string): int {
-        return compare_names(a, b);
+    keyed.sort(func(a: string, b: string): int {
+        return a.compareTo(b);
     });
+    var out: list[string] = [];
+    for (k in keyed) {
+        let parts = k.split(sep);
+        out.push(parts[parts.len() - 1]);
+    }
     return out;
 }
 
@@ -216,11 +234,64 @@ pub func wildcard_in_directory(operand: string): bool {
     return has_wildcards(split_path(operand).dir);
 }
 
+# The standard output of a system tool, or "" when it cannot be run. PATH
+# may not list the system directories, so the usual places are tried too.
+# (Natively, the result of exec must be read in the function that called it.)
+func tool_output(name: string, args: list[string]): string {
+    for (prefix in ["", "/usr/bin/", "/bin/"]) {
+        var argv = [prefix + name];
+        for (a in args) {
+            argv.push(a);
+        }
+        let r = exec(argv);
+        if (r.exit_code != 127) {
+            return r.stdout.to_string();
+        }
+    }
+    return "";
+}
+
+# The symbolic links at or under directory `dir` (`` = the current
+# directory), as the set of paths a walk builds from `dir` with join_path()
+# (`sub/link` for `` or `sub`, `./sub/link` for `.`). Loup 1.26.0 has no
+# lstat(), so this runs `find -H DIR -type l -print0` once; a link to a
+# directory found here must not be descended into, since links can form
+# loops. `dir` itself is followed if it is a link (-H). Empty when find
+# cannot be run.
+pub func symlinks_under(dir: string): dict[string, bool] {
+    var links: dict[string, bool] = {};
+    var base = if (dir.len() == 0) { "." } else { fs_path(dir) };
+    if (base.startsWith("-")) {
+        base = "./" + base;
+    }
+    while (base.len() > 1 and base.endsWith("/")) {
+        base = base.slice(0, base.len() - 1);
+    }
+    let text = tool_output("find", ["-H", base, "-type", "l", "-print0"]);
+    for (item in text.split(str(char.of(0)))) {
+        # find spells the start as given (GNU find and bfs differ on
+        # trailing slashes): keep only the part below it.
+        if (item.len() <= base.len() or !item.startsWith(base)) {
+            continue;
+        }
+        var rest = item.slice(base.len());
+        while (rest.startsWith("/")) {
+            rest = rest.slice(1);
+        }
+        if (rest.len() > 0) {
+            links[join_path(dir, rest)] = true;
+        }
+    }
+    return links;
+}
+
 # Every directory at or under `dir`, in `/S` order: `dir` first, then each
 # subdirectory (sorted) with everything under it, depth first. `dir` `` means
-# the current directory; results are joined to `dir` as given. Stops
-# descending at MAX_DEPTH.
+# the current directory; results are joined to `dir` as given. Symbolic
+# links to directories are listed by their parent like any directory, but
+# not walked into (they can loop). Stops descending at MAX_DEPTH.
 pub func walk_dirs(dir: string): list[string] {
+    let links = symlinks_under(dir);
     var out: list[string] = [];
     var stack: list[string] = [dir];
     var depths: list[int] = [0];
@@ -232,8 +303,11 @@ pub func walk_dirs(dir: string): list[string] {
             let subs = subdirectories(current);
             var i = subs.len() - 1;
             while (i >= 0) {
-                stack.push(join_path(current, subs[i]));
-                depths.push(depth + 1);
+                let child = join_path(current, subs[i]);
+                if (!links.containsKey(child)) {
+                    stack.push(child);
+                    depths.push(depth + 1);
+                }
                 i -= 1;
             }
         }
@@ -244,7 +318,9 @@ pub func walk_dirs(dir: string): list[string] {
 # Every entry of the given kinds under `dir` (inclusive) whose name matches
 # `pattern`, in `/S` order: the matches in `dir` itself (sorted), then each
 # subdirectory in turn (sorted), depth first. `dir` `` means the current
-# directory; results are joined to `dir` as given.
+# directory; results are joined to `dir` as given. Like walk_dirs(), it
+# does not search inside symbolic links to directories (a link itself can
+# still match).
 pub func find_recursive(dir: string, pattern: string, kinds: int): list[string] {
     var out: list[string] = [];
     for (d in walk_dirs(dir)) {

@@ -1,5 +1,12 @@
 @mode(host.dual)
 
+# Top level of xcopy: parse the arguments (with COPYCMD), handle /? and
+# --version, check the operand count, run the copy and return xcopy's
+# ERRORLEVEL.
+#
+# Runtime: host.dual. Compiled into the native binary build/xcopy by `make
+# build`; `loup run source/main.loup` interprets the same code.
+
 from appinfo import (EXIT_OK, EXIT_INIT);
 from cli.args import (parse_args, operand_error);
 from cli.usage import (usage, version_line);

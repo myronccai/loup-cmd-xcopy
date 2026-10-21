@@ -4,6 +4,9 @@
 # a file name or directory name...?`). Loup 1.26.0 can only read standard
 # input whole, so the first prompt reads all of it and each prompt then
 # takes the next line. Pass the Answers as `edits`.
+#
+# Runtime: host.dual. Compiled into the native binary build/xcopy by `make
+# build`; `loup run source/main.loup` interprets the same code.
 
 pub struct Answers {
     pub var lines: list[string];

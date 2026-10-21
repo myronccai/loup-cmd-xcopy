@@ -1,7 +1,12 @@
 @mode(host.dual)
 
-# Entry point. Keep this file thin: all behaviour lives in cli.app.run so
-# that tests can call it with an argument list.
+# xcopy: entry point. Keep this file thin: all behaviour lives in
+# cli.app.run so that tests can call it with an argument list.
+#
+# Runtime: host.dual. main() gets the command line from runtime.args(). The
+# same source runs two ways: `make run` interprets it with `loup run
+# source/main.loup`, and `make build` compiles it with the rest of source/
+# into the native binary build/xcopy, which `make e2e` and CI then exercise.
 
 from cli.app import (run);
 
